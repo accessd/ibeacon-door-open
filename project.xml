@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<project>
+    <gatt in="iBeacon112-gatt.xml" />
+    <hardware in="iBeacon112-hardware.xml" />    
+    <script in="iBeacon112.bgs" />
+    <image out="out.hex" />    
+</project>
