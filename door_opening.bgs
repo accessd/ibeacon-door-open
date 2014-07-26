@@ -1,0 +1,119 @@
+dim read_result
+dim port
+dim data
+# Door open Toggle Control. 0x01 = Toggle. Set via GATT
+dim xgatt_opening_value
+
+dim load_result
+dim load_len
+dim uuid_value(16)
+dim major_value(2)
+dim minor_value(2)
+dim tx_value(1)
+dim ps_beacon_uuid
+dim ps_beacon_major
+dim ps_beacon_minor
+dim ps_beacon_tx
+dim adv_data(30) # custom adv data
+
+# Boot event listener
+event system_boot(major, minor, patch, build, ll_version, protocol_version, hw)
+
+  # Set advertisement interval to 100 to 500ms. Use all advertisement channels
+	call gap_set_adv_parameters(20, 100, 7) 
+
+  ps_beacon_uuid = $8000
+  call flash_ps_load(ps_beacon_uuid)(load_result, load_len, uuid_value(0:16))
+  call attributes_write(xgatt_beacon_uuid, 0, load_len, uuid_value(0:16))
+  ps_beacon_major = $8001
+  call flash_ps_load(ps_beacon_major)(load_result, load_len, major_value(0:2))
+  call attributes_write(xgatt_beacon_major, 0, load_len, major_value(0:2))
+  ps_beacon_minor = $8002
+  call flash_ps_load(ps_beacon_minor)(load_result, load_len, minor_value(0:2))
+  call attributes_write(xgatt_beacon_minor, 0, load_len, minor_value(0:2))
+  ps_beacon_tx = $8003
+  call flash_ps_load(ps_beacon_tx)(load_result, load_len, tx_value(0:1))
+  call attributes_write(xgatt_beacon_tx, 0, load_len, tx_value(0:1))
+
+  adv_data( 0:1) = $02 # ad field length = 2 bytes
+  adv_data( 1:1) = gap_ad_type_flags   # ad field type = 0x01 (Flags)
+  adv_data( 2:1) = $06 # 3.C.18.1: 00000110b  generaldisc, no BR/EDR
+
+  adv_data( 3:1) = $1a # ad field length = 26 bytes
+  adv_data( 4:1) = $ff # 3.C.18.11 manufacturer-specific data
+  adv_data( 5:1) = $4c # Apple, Inc.
+  adv_data( 6:1) = $00 # Apple, Inc.
+  adv_data( 7:1) = $02 # iBeacon header, part 1
+  adv_data( 8:1) = $15 # iBeacon header, part 2 (maybe length?)
+  adv_data(9:16) = uuid_value(0:16)
+  adv_data(25:2) = major_value(0:2)
+  adv_data(27:2) = minor_value(0:2)
+  adv_data(29:1) = tx_value(0:1) # 2's complement of calibrated Tx Power
+
+  # set advertising payload so it can be seen in the GATT
+  call attributes_write(xgatt_beacon_adv, 0, 30, adv_data(0:30))
+
+  # set the iBeacon data
+  call gap_set_adv_data(0, 30, adv_data(0:30))
+  call gap_set_mode(gap_user_data, gap_undirected_connectable)
+
+  xgatt_opening_value = 1
+
+  # configure P0.1 as output
+  call hardware_io_port_config_direction(0, $02)
+
+  # Disable P0.1 pin. Parameters: I/O port to write to 0/1/2,
+  #                               bitmask of pins to modify,
+  #                               bitmask of pin values to set
+  call hardware_io_port_write(0, $02, 0)
+end
+
+# catch new or updated connection
+event connection_status(connection, flags, address, address_type, conn_interval, timeout, latency, bonding)
+    # check for "new connection established" event
+    if (flags & $05) = $05 then
+
+    end if
+end
+
+#Timer event listener toggles OFF
+event hardware_soft_timer(handle)
+  call hardware_io_port_write(0, $02, 0)
+end
+
+# GATT event listenter
+event attributes_value(connection, reason, handle, offset, value_len, value)
+  if handle = xgatt_door then
+    xgatt_opening_value = value(0:1)
+    if xgatt_opening_value
+        # Toggle ON
+        call hardware_io_port_write(0, $02, $02)
+        # Set timer to generate event every 1s
+        call hardware_set_soft_timer(32768, 1, 0)
+    end if
+  end if
+
+  if handle = xgatt_beacon_uuid then
+    call flash_ps_save(ps_beacon_uuid, 16, value(0:16))
+    adv_data(9:16) = value(0:16)
+  end if
+  if handle = xgatt_beacon_major then
+    call flash_ps_save(ps_beacon_major, 2, value(0:2))
+    adv_data(25:2) = value(0:2)
+  end if
+  if handle = xgatt_beacon_minor then
+    call flash_ps_save(ps_beacon_minor, 2, value(0:2))
+    adv_data(27:2) = value(0:2)
+  end if
+  if handle = xgatt_beacon_tx then
+    call flash_ps_save(ps_beacon_tx, 1, value(0:1))
+    adv_data(29:1) = value(0:1) # 2's complement of calibrated Tx Power
+  end if
+  # update the advertising payload
+  call attributes_write(xgatt_beacon_adv, 0, 30, adv_data(0:30))
+  call gap_set_adv_data(0, 30, adv_data(0:30))
+end
+
+event connection_disconnected(handle, result)
+  call gap_set_mode(gap_user_data,gap_undirected_connectable)
+end
